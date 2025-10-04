@@ -8,6 +8,7 @@ class Report(db.Model):
     __tablename__ = 'reports'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # User isolation
     title = db.Column(db.String(255), nullable=False)
     generated_at = db.Column(db.DateTime, default=datetime.utcnow)
     file_path = db.Column(db.String(255), nullable=True)
@@ -23,6 +24,7 @@ class Report(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
+            'user_id': self.user_id,
             'title': self.title,
             'generated_at': self.generated_at.isoformat() if self.generated_at else None,
             'file_path': self.file_path,

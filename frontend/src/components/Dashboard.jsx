@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { api } from '../config/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -15,15 +16,10 @@ import {
   FileText,
   Settings
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const Dashboard = () => {
-  const [scanStatus, setScanStatus] = useState({
-    is_scanning: false,
-    progress: 0,
-    current_step: '',
-    devices_found: 0,
-    vulnerabilities_found: 0
-  });
+  const { scanStatus, refreshScanStatus } = useAuth();  // Get scan status from global context
   
   const [stats, setStats] = useState({
     total: 0,
@@ -36,25 +32,15 @@ const Dashboard = () => {
   const [devices, setDevices] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Fetch scan status
-  const fetchScanStatus = async () => {
-    try {
-      const response = await fetch('/api/scan/status');
-      const data = await response.json();
-      setScanStatus(data);
-    } catch (error) {
-      console.error('Error fetching scan status:', error);
-    }
-  };
+  // Scan status is now handled globally in AuthContext
 
   // Fetch vulnerability stats
   const fetchStats = async () => {
     try {
-      const response = await fetch('/api/vulnerabilities/stats');
-      const data = await response.json();
+      const { data } = await api.get('/vulnerabilities/stats');
       if (data.success) {
         setStats(data.stats);
-      }
+      } 
     } catch (error) {
       console.error('Error fetching stats:', error);
     }
@@ -63,8 +49,7 @@ const Dashboard = () => {
   // Fetch devices
   const fetchDevices = async () => {
     try {
-      const response = await fetch('/api/devices');
-      const data = await response.json();
+      const { data } = await api.get('/devices');
       if (data.success) {
         setDevices(data.devices);
       }
@@ -74,31 +59,52 @@ const Dashboard = () => {
   };
 
   // Start scan
-  const startScan = async () => {
+  const startScan = async (mode = 'comprehensive') => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/scan/start', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({})
+      console.log('[Dashboard] Starting scan with mode:', mode);
+      
+      const result = await api.post('/scan/start', {
+        scan_mode: mode
       });
       
-      const data = await response.json();
-      if (data.success) {
-        // Start polling for status updates
-        const interval = setInterval(() => {
-          fetchScanStatus();
-          if (!scanStatus.is_scanning) {
-            clearInterval(interval);
-            fetchStats();
-            fetchDevices();
+      console.log('[Dashboard] Scan start result:', result);
+      
+      if (result && result.data && result.data.success) {
+        alert('تم بدء الفحص بنجاح!');
+        // Immediately refresh scan status to trigger polling
+        await refreshScanStatus();
+        // Also refresh data
+        setTimeout(() => {
+          fetchStats();
+          fetchDevices();
+        }, 1000);
+      } else if (result && result.data) {
+        // Check if it's because another scan is running
+        if (result.data.message && result.data.message.includes('فحص آخر قيد التشغيل')) {
+          const stopAndRetry = window.confirm('يوجد فحص قيد التشغيل. هل تريد إيقافه وبدء فحص جديد؟');
+          if (stopAndRetry) {
+            await stopScan();
+            setTimeout(() => startScan(mode), 1000);
+            return;
           }
-        }, 2000);
+        }
+        alert('خطأ: ' + (result.data.message || 'فشل بدء الفحص'));
+      } else {
+        alert('خطأ: لم يتم استلام رد من الخادم');
       }
     } catch (error) {
-      console.error('Error starting scan:', error);
+      console.error('[Dashboard] Error starting scan:', error);
+      // If it's a 400 error, it might be because a scan is already running
+      if (error.message && error.message.includes('400')) {
+        const stopAndRetry = window.confirm('يوجد فحص قيد التشغيل. هل تريد إيقافه وبدء فحص جديد؟');
+        if (stopAndRetry) {
+          await stopScan();
+          setTimeout(() => startScan(mode), 1000);
+          return;
+        }
+      }
+      alert('خطأ في الاتصال بالخادم: ' + error.message);
     } finally {
       setIsLoading(false);
     }
@@ -107,12 +113,15 @@ const Dashboard = () => {
   // Stop scan
   const stopScan = async () => {
     try {
-      const response = await fetch('/api/scan/stop', {
-        method: 'POST'
-      });
+      const { data } = await api.post('/scan/stop', {});
       
-      if (response.ok) {
-        fetchScanStatus();
+      if (data.success) {
+        alert('تم إيقاف الفحص');
+        // Scan status will update automatically via global polling
+        setTimeout(() => {
+          fetchStats();
+          fetchDevices();
+        }, 500);
       }
     } catch (error) {
       console.error('Error stopping scan:', error);
@@ -122,30 +131,27 @@ const Dashboard = () => {
   // Generate report
   const generateReport = async () => {
     try {
-      const response = await fetch('/api/reports/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: `تقرير أمان IoT - ${new Date().toLocaleDateString('ar-SA')}`
-        })
+      const { data } = await api.post('/reports/generate', {
+        title: `تقرير أمان IoT - ${new Date().toLocaleDateString('ar-SA')}`
       });
-      
-      const data = await response.json();
       if (data.success) {
         alert('تم إنشاء التقرير بنجاح!');
       }
     } catch (error) {
       console.error('Error generating report:', error);
     }
-  };
+  }; 
 
   useEffect(() => {
-    fetchScanStatus();
     fetchStats();
-    fetchDevices();
-  }, []);
+    fetchDevices();               
+    
+    // Refresh data when scan completes
+    if (!scanStatus.is_scanning && scanStatus.progress === 100) {
+      fetchStats();
+      fetchDevices();
+    }
+  }, [scanStatus.is_scanning]);
 
   const getSeverityColor = (severity) => {
     switch (severity?.toLowerCase()) {
@@ -213,7 +219,7 @@ const Dashboard = () => {
               ) : (
                 <div className="space-y-4">
                   <Button 
-                    onClick={startScan} 
+                    onClick={() => startScan('comprehensive')} 
                     disabled={isLoading}
                     className="w-full bg-blue-600 hover:bg-blue-700"
                   >

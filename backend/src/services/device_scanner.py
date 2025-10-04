@@ -26,11 +26,13 @@ class DeviceScanner:
     def get_network_range(self):
         """Get the local network range automatically"""
         try:
-            # Get default gateway
+            # Method 1: Try to get from default route
             result = subprocess.run(['ip', 'route', 'show', 'default'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
+                                  capture_output=True, text=True, timeout=5)
+            
+            if result.returncode == 0 and result.stdout:
                 # Extract interface from default route
+                interface = None
                 lines = result.stdout.strip().split('\n')
                 for line in lines:
                     if 'default via' in line:
@@ -39,19 +41,66 @@ class DeviceScanner:
                             interface = parts[parts.index('dev') + 1]
                             break
                 
-                # Get IP and netmask for the interface
-                result = subprocess.run(['ip', 'addr', 'show', interface], 
-                                      capture_output=True, text=True)
-                if result.returncode == 0:
-                    # Extract IP/CIDR
-                    match = re.search(r'inet (\d+\.\d+\.\d+\.\d+/\d+)', result.stdout)
-                    if match:
-                        return match.group(1)
+                if interface:
+                    # Get IP and netmask for the interface
+                    result = subprocess.run(['ip', 'addr', 'show', interface], 
+                                          capture_output=True, text=True, timeout=5)
+                    if result.returncode == 0:
+                        # Extract IP/CIDR
+                        match = re.search(r'inet (\d+\.\d+\.\d+\.\d+)/(\d+)', result.stdout)
+                        if match:
+                            ip_addr = match.group(1)
+                            cidr = match.group(2)
+                            # Convert IP and CIDR to network range
+                            from ipaddress import ip_network, ip_address
+                            network = ip_network(f"{ip_addr}/{cidr}", strict=False)
+                            network_range = str(network)
+                            print(f"Auto-detected network range: {network_range} on interface {interface}")
+                            return network_range
             
-            # Fallback to common private networks
+            # Method 2: Try all active interfaces
+            result = subprocess.run(['ip', '-o', 'addr', 'show'], 
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    # Look for non-loopback IPv4 addresses
+                    if 'inet ' in line and 'scope global' in line:
+                        match = re.search(r'inet (\d+\.\d+\.\d+\.\d+)/(\d+)', line)
+                        if match:
+                            ip_addr = match.group(1)
+                            cidr = match.group(2)
+                            # Skip loopback
+                            if not ip_addr.startswith('127.'):
+                                from ipaddress import ip_network
+                                network = ip_network(f"{ip_addr}/{cidr}", strict=False)
+                                network_range = str(network)
+                                print(f"Auto-detected network range: {network_range}")
+                                return network_range
+            
+            # Method 3: Try socket method (cross-platform)
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                # Connect to a public DNS to get local IP
+                s.connect(('8.8.8.8', 80))
+                local_ip = s.getsockname()[0]
+                # Assume /24 network
+                ip_parts = local_ip.split('.')
+                network_range = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
+                print(f"Socket method detected network: {network_range}")
+                return network_range
+            except Exception:
+                pass
+            finally:
+                s.close()
+            
+            # Fallback: Try common private network ranges
+            print("Warning: Could not auto-detect network. Using fallback: 192.168.1.0/24")
+            print("Please specify network_range manually if this is incorrect.")
             return "192.168.1.0/24"
+            
         except Exception as e:
             print(f"Error getting network range: {e}")
+            print("Using fallback network range: 192.168.1.0/24")
             return "192.168.1.0/24"
     
     def scan_network(self, network_range=None):

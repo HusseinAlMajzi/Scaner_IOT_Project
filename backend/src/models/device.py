@@ -8,6 +8,7 @@ class Device(db.Model):
     __tablename__ = 'devices'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # User isolation
     ip_address = db.Column(db.String(45), nullable=False)  # IPv4 or IPv6
     mac_address = db.Column(db.String(17), nullable=True)
     hostname = db.Column(db.String(255), nullable=True)
@@ -26,6 +27,7 @@ class Device(db.Model):
     def to_dict(self):
         return {
             'id': self.id,  
+            'user_id': self.user_id,
             'ip_address': self.ip_address,   
             'mac_address': self.mac_address,   
             'hostname': self.hostname,   

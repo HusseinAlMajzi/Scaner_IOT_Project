@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 db = SQLAlchemy()
 
 # استورد الموديلات بعد تعريف db
+from .user import User
 from .device import Device
 from .vulnerability import Vulnerability
 from .scan_result import ScanResult
@@ -11,7 +12,7 @@ from .report import Report
 
 
 # Import all models to ensure they are registered with SQLAlchemy
-__all__ = ['Device', 'Vulnerability', 'ScanResult', 'Report', 'db']
+__all__ = ['User', 'Device', 'Vulnerability', 'ScanResult', 'Report', 'db']
 
 
 

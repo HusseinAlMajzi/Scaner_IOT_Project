@@ -180,13 +180,13 @@ iot_security_scanner/
 │   │   └── static/              # ملفات Frontend المبنية
 │   ├── venv/                    # البيئة الافتراضية
 │   └── requirements.txt    
-│   │   ├── App.jsx              # المكون الرئيسي
-│   │   ├── components/          # مكونات React
-│   │   │   ├── Dashboard.jsx
-│   │   │   ├── DeviceList.jsx
-│   │   │   ├── VulnerabilityList.jsx
-│   │   │   └── ReportsList.jsx
-│   │   └── App.css              # أنماط CSS
+│   │   
+│   │   
+│   │      
+│   │   
+│   │   
+│   │   
+│   │   
 │   ├── dist/                    # ملفات البناء
 │   ├── package.json             # متطلبات Node.js
 │   └── vite.config.js           # إعدادات Vite

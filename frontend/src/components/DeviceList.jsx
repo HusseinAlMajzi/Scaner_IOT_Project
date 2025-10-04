@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { api } from '../config/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,8 +29,7 @@ const DeviceList = () => {
   const fetchDevices = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/devices');
-      const data = await response.json();
+      const { data } = await api.get('/devices');
       if (data.success) {
         setDevices(data.devices);
         setFilteredDevices(data.devices);
@@ -44,8 +44,7 @@ const DeviceList = () => {
   // Fetch device details
   const fetchDeviceDetails = async (deviceId) => {
     try {
-      const response = await fetch(`/api/devices/${deviceId}`);
-      const data = await response.json();
+      const { data } = await api.get(`/devices/${deviceId}`);
       if (data.success) {
         setSelectedDevice(data.device);
       }

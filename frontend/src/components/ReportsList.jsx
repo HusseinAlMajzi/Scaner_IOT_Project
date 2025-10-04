@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { api } from '../config/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,8 +26,7 @@ const ReportsList = () => {
   const fetchReports = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch('/api/reports');
-      const data = await response.json();
+      const { data } = await api.get('/reports');
       if (data.success) {
         setReports(data.reports);
         setFilteredReports(data.reports);
@@ -42,17 +42,9 @@ const ReportsList = () => {
   const generateReport = async () => {
     try {
       setIsGenerating(true);
-      const response = await fetch('/api/reports/generate', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          title: `تقرير أمان IoT - ${new Date().toLocaleDateString('ar-SA')}`
-        })
+      const { data } = await api.post('/reports/generate', {
+        title: `تقرير أمان IoT - ${new Date().toLocaleDateString('ar-SA')}`
       });
-      
-      const data = await response.json();
       if (data.success) {
         alert('تم إنشاء التقرير بنجاح!');
         fetchReports(); // Refresh the list
@@ -70,8 +62,7 @@ const ReportsList = () => {
   // Download report
   const downloadReport = async (reportId) => {
     try {
-      const response = await fetch(`/api/reports/${reportId}/download`);
-      const data = await response.json();
+      const { data } = await api.get(`/reports/${reportId}/download`);
       
       if (data.success) {
         // Create a temporary link to download the file
