@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../config/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const { scanStatus, refreshScanStatus, activeScanSession, setActiveScanSession } = useAuth();
   
   const [stats, setStats] = useState({
@@ -184,17 +186,25 @@ const Dashboard = () => {
     }
   };
 
-  // Generate report
+  // Generate report for active scan session
   const generateReport = async () => {
+    if (!activeScanSession) {
+      alert('الرجاء اختيار فحص أو إجراء فحص جديد أولاً');
+      return;
+    }
+    
     try {
       const { data } = await api.post('/reports/generate', {
+        scan_session_id: activeScanSession,
         title: `تقرير أمان IoT - ${new Date().toLocaleDateString('ar-SA')}`
       });
       if (data.success) {
-        alert('تم إنشاء التقرير بنجاح!');
+        alert('تم إنشاء تقرير PDF بنجاح!');
+        navigate('/dashboard/reports');
       }
     } catch (error) {
       console.error('Error generating report:', error);
+      alert('حدث خطأ في إنشاء التقرير');
     }
   }; 
 
@@ -406,49 +416,42 @@ const Dashboard = () => {
         </Card>
 
         {/* Quick Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Card className="cursor-pointer hover:shadow-lg transition-shadow">
             <CardHeader className="text-center">
               <FileText className="h-8 w-8 mx-auto mb-2 text-blue-600" />
               <CardTitle className="text-lg">إنشاء تقرير</CardTitle>
               <CardDescription>
-                إنشاء تقرير مفصل عن الثغرات المكتشفة
+                إنشاء تقرير PDF مفصل عن الثغرات المكتشفة
               </CardDescription>
             </CardHeader>
             <CardContent>
               <Button onClick={generateReport} className="w-full" variant="outline">
-                إنشاء تقرير جديد
+                إنشاء تقرير PDF
               </Button>
             </CardContent>
           </Card>
 
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow">
+          <Card 
+            className="cursor-pointer hover:shadow-lg transition-shadow"
+            onClick={() => navigate('/dashboard/vulnerabilities')}
+          >
             <CardHeader className="text-center">
               <AlertTriangle className="h-8 w-8 mx-auto mb-2 text-orange-600" />
               <CardTitle className="text-lg">الثغرات الحرجة</CardTitle>
               <CardDescription>
-                عرض الثغرات التي تتطلب اهتماماً فورياً
+                عرض جميع الثغرات المكتشفة
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <Button className="w-full" variant="outline">
-                عرض الثغرات الحرجة
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="cursor-pointer hover:shadow-lg transition-shadow">
-            <CardHeader className="text-center">
-              <Settings className="h-8 w-8 mx-auto mb-2 text-gray-600" />
-              <CardTitle className="text-lg">الإعدادات</CardTitle>
-              <CardDescription>
-                تخصيص إعدادات الفحص والتقارير
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button className="w-full" variant="outline">
-                فتح الإعدادات
-              </Button>
+              <div className="flex justify-center space-x-2 space-x-reverse">
+                <Badge className="bg-red-500 text-white">
+                  {stats.critical} حرجة
+                </Badge>
+                <Badge className="bg-orange-500 text-white">
+                  {stats.high} عالية
+                </Badge>
+              </div>
             </CardContent>
           </Card>
         </div>

@@ -1,10 +1,11 @@
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from flask import current_app
 from flask_login import login_required, current_user
 from datetime import datetime
 import threading
 import uuid
+import os
 from src.models import db, Device, Vulnerability, ScanResult, Report, ScanSession
 from src.services.device_scanner import DeviceScanner
 from src.services.vulnerability_scanner import VulnerabilityScanner
@@ -274,13 +275,25 @@ def get_vulnerability_stats():
 @scanner_bp.route('/reports/generate', methods=['POST'])
 @login_required
 def generate_report():
-    """Generate a security report"""
+    """Generate a security report for active scan session"""
     try:
         data = request.get_json() or {}
         report_title = data.get('title', f'تقرير أمان IoT - {datetime.now().strftime("%Y-%m-%d")}')
+        scan_session_id = data.get('scan_session_id')  # Get scan session filter
         
-        # Get user's devices and their vulnerabilities
-        devices = Device.query.filter_by(user_id=current_user.id).all()
+        # Get devices for this scan session or all user devices
+        if scan_session_id:
+            devices = Device.query.filter_by(
+                user_id=current_user.id,
+                scan_session_id=scan_session_id
+            ).all()
+            
+            # Add scan name to report title
+            scan_session = ScanSession.query.get(scan_session_id)
+            if scan_session:
+                report_title = f'تقرير: {scan_session.name}'
+        else:
+            devices = Device.query.filter_by(user_id=current_user.id).all()
         user_device_ids = [d.id for d in devices]
         scan_results = ScanResult.query.filter(ScanResult.device_id.in_(user_device_ids)).all()
         vuln_ids = [sr.vulnerability_id for sr in scan_results]
@@ -296,11 +309,12 @@ def generate_report():
             devices_data, vulns_data, results_data, report_title
         )
         
-        # Save report to database
+        # Save report to database - use PDF if available, otherwise HTML
+        report_file = report_info.get('pdf_file') or report_info['html_file']
         report = Report(
             user_id=current_user.id,
             title=report_info['title'],
-            file_path=report_info['html_file'],
+            file_path=report_file,
             scan_ids=report_info['scan_ids'],
             summary=report_info['summary'],
             total_devices=report_info['total_devices'],
@@ -461,26 +475,73 @@ def start_advanced_security_scan():
 @scanner_bp.route('/reports/<report_id>/download', methods=['GET'])
 @login_required
 def download_report(report_id):
-    """Download a specific report"""
+    """Download a specific report as PDF"""
     try:
+        
         report = Report.query.filter_by(id=report_id, user_id=current_user.id).first()
         if not report:
             return jsonify({
                 'success': False,
-                'message': 'التقرير غير موجود أو لا تملك صلاحية للوصول إليه'
+                'message': 'التقرير غير موجود'
             }), 404
         
-        # Return file path for frontend to handle download
-        return jsonify({
-            'success': True,
-            'file_path': report.file_path,
-            'filename': f"{report.title}.html"
-        })
+        if not os.path.exists(report.file_path):
+            return jsonify({
+                'success': False,
+                'message': 'ملف التقرير غير موجود'
+            }), 404
+        
+        # Determine file extension
+        file_ext = '.pdf' if report.file_path.endswith('.pdf') else '.html'
+        download_name = f"{report.title}{file_ext}"
+        
+        # Send file for download
+        return send_file(
+            report.file_path,
+            as_attachment=True,
+            download_name=download_name,
+            mimetype='application/pdf' if file_ext == '.pdf' else 'text/html'
+        )
         
     except Exception as e:
         return jsonify({
             'success': False,
             'message': f'خطأ في تحميل التقرير: {str(e)}'
+        }), 500
+
+
+@scanner_bp.route('/reports/<report_id>/preview', methods=['GET'])
+@login_required
+def preview_report(report_id):
+    """Preview a report in browser"""
+    try:
+        
+        report = Report.query.filter_by(id=report_id, user_id=current_user.id).first()
+        if not report:
+            return jsonify({
+                'success': False,
+                'message': 'التقرير غير موجود'
+            }), 404
+        
+        # For preview, always use HTML version if available
+        html_path = report.file_path.replace('.pdf', '.html') if report.file_path.endswith('.pdf') else report.file_path
+        
+        if not os.path.exists(html_path):
+            return jsonify({
+                'success': False,
+                'message': 'ملف المعاينة غير موجود'
+            }), 404
+        
+        # Send HTML file for preview (not as attachment)
+        return send_file(
+            html_path,
+            mimetype='text/html'
+        )
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'خطأ في معاينة التقرير: {str(e)}'
         }), 500
 
 def perform_comprehensive_scan(network_range, scan_id, app, user_id):

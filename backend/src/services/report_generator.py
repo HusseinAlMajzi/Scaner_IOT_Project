@@ -4,11 +4,22 @@ from datetime import datetime
 from typing import List, Dict
 import markdown
 from jinja2 import Template
+try:
+    from weasyprint import HTML
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
+    print("Warning: weasyprint not available, PDF generation will be disabled")
 
 class ReportGenerator:
-    def __init__(self, reports_dir='reports'):
+    def __init__(self, reports_dir=None):
+        # Use absolute path relative to backend root
+        if reports_dir is None:
+            backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            reports_dir = os.path.join(backend_root, 'reports')
         self.reports_dir = reports_dir
         os.makedirs(reports_dir, exist_ok=True)
+        print(f"Reports will be saved to: {self.reports_dir}")
         
         # HTML template for reports
         self.html_template = """
@@ -19,101 +30,112 @@ class ReportGenerator:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ report_title }}</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             line-height: 1.6;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
+            background-color: white;
             direction: rtl;
         }
         .container {
-            max-width: 1200px;
-            margin: 0 auto;
+            width: 100%;
             background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 0 20px rgba(0,0,0,0.1);
+            padding: 15px;
         }
         .header {
             text-align: center;
             border-bottom: 3px solid #2c3e50;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
         }
         .header h1 {
             color: #2c3e50;
-            margin: 0;
-            font-size: 2.5em;
+            margin: 0 0 10px 0;
+            font-size: 2em;
         }
         .header .subtitle {
             color: #7f8c8d;
-            font-size: 1.2em;
-            margin-top: 10px;
+            font-size: 1em;
+            margin-top: 5px;
         }
         .summary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 30px;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
         }
         .summary h2 {
-            margin-top: 0;
+            margin: 0 0 10px 0;
             color: white;
+            font-size: 1.3em;
+        }
+        .summary p {
+            margin: 0;
+            font-size: 0.95em;
         }
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            margin-bottom: 20px;
         }
         .stat-card {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 5px;
             text-align: center;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            border-left: 5px solid #3498db;
+            border-left: 4px solid #3498db;
         }
         .stat-card.critical { border-left-color: #e74c3c; }
         .stat-card.high { border-left-color: #f39c12; }
         .stat-card.medium { border-left-color: #f1c40f; }
         .stat-card.low { border-left-color: #27ae60; }
         .stat-number {
-            font-size: 2.5em;
+            font-size: 1.8em;
             font-weight: bold;
             color: #2c3e50;
         }
         .stat-label {
             color: #7f8c8d;
-            font-size: 1.1em;
+            font-size: 0.85em;
         }
         .section {
-            margin-bottom: 40px;
+            margin-bottom: 25px;
         }
         .section h2 {
             color: #2c3e50;
             border-bottom: 2px solid #ecf0f1;
-            padding-bottom: 10px;
+            padding-bottom: 8px;
+            margin-bottom: 15px;
+            font-size: 1.5em;
         }
         .device-card {
             background: #f8f9fa;
             border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 15px;
+            page-break-inside: avoid;
         }
         .device-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
         }
         .device-ip {
-            font-size: 1.3em;
+            font-size: 1.1em;
             font-weight: bold;
             color: #2c3e50;
+        }
+        .device-card > div {
+            font-size: 0.9em;
+            line-height: 1.8;
         }
         .device-type {
             background: #3498db;
@@ -128,10 +150,11 @@ class ReportGenerator:
         .vulnerability-item {
             background: white;
             border: 1px solid #dee2e6;
-            border-radius: 5px;
-            padding: 15px;
-            margin-bottom: 10px;
-            border-right: 5px solid #3498db;
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-right: 4px solid #3498db;
+            page-break-inside: avoid;
         }
         .vulnerability-item.critical { border-right-color: #e74c3c; }
         .vulnerability-item.high { border-right-color: #f39c12; }
@@ -160,21 +183,24 @@ class ReportGenerator:
         .severity-badge.low { background: #27ae60; }
         .vuln-description {
             color: #555;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
+            font-size: 0.9em;
         }
         .vuln-recommendation {
             background: #e8f5e8;
             border: 1px solid #c3e6c3;
-            border-radius: 5px;
-            padding: 10px;
+            border-radius: 4px;
+            padding: 8px;
             color: #2d5a2d;
+            font-size: 0.85em;
         }
         .recommendations {
             background: #f0f8ff;
             border: 1px solid #b6d7ff;
-            border-radius: 10px;
-            padding: 20px;
-            margin-top: 30px;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 20px;
+            page-break-inside: avoid;
         }
         .recommendations h3 {
             color: #2c3e50;
@@ -186,21 +212,34 @@ class ReportGenerator:
         }
         .recommendation-list li {
             background: white;
-            margin: 10px 0;
-            padding: 15px;
-            border-radius: 5px;
-            border-right: 4px solid #3498db;
+            margin: 8px 0;
+            padding: 10px;
+            border-radius: 4px;
+            border-right: 3px solid #3498db;
+            font-size: 0.9em;
         }
         .footer {
             text-align: center;
-            margin-top: 40px;
-            padding-top: 20px;
+            margin-top: 25px;
+            padding-top: 15px;
             border-top: 1px solid #ecf0f1;
             color: #7f8c8d;
+            font-size: 0.85em;
         }
         @media print {
-            body { background: white; }
-            .container { box-shadow: none; }
+            body { 
+                background: white;
+                margin: 0;
+                padding: 0;
+            }
+            .container { 
+                box-shadow: none;
+                padding: 10px;
+            }
+        }
+        @page {
+            size: A4;
+            margin: 10mm;
         }
     </style>
 </head>
@@ -318,30 +357,36 @@ class ReportGenerator:
         # Generate HTML report
         html_content = self._generate_html_report(report_data, report_title)
         
-        # Generate Markdown report
-        markdown_content = self._generate_markdown_report(report_data, report_title)
-        
         # Save reports to files
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        pdf_filename = f"iot_security_report_{timestamp}.pdf"
         html_filename = f"iot_security_report_{timestamp}.html"
-        md_filename = f"iot_security_report_{timestamp}.md"
         
+        pdf_path = os.path.join(self.reports_dir, pdf_filename)
         html_path = os.path.join(self.reports_dir, html_filename)
-        md_path = os.path.join(self.reports_dir, md_filename)
         
+        # Save HTML first (needed for PDF generation)
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
         
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(markdown_content)
+        # Generate PDF from HTML
+        if WEASYPRINT_AVAILABLE:
+            try:
+                HTML(string=html_content).write_pdf(pdf_path)
+                print(f"✓ PDF report generated: {pdf_path}")
+            except Exception as e:
+                print(f"Warning: PDF generation failed: {e}")
+                print("HTML report is still available")
+        else:
+            print("Warning: weasyprint not installed, PDF generation skipped")
         
         # Create report metadata
         report_info = {
             'id': f"report_{timestamp}",
             'title': report_title,
             'generated_at': datetime.now(),
+            'pdf_file': pdf_path if WEASYPRINT_AVAILABLE and os.path.exists(pdf_path) else None,
             'html_file': html_path,
-            'markdown_file': md_path,
             'summary': report_data['summary'],
             'total_devices': report_data['total_devices'],
             'total_vulnerabilities': report_data['total_vulnerabilities'],

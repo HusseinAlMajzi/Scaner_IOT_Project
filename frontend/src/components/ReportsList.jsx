@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../config/api';
+import { useAuth } from '../contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 
 const ReportsList = () => {
+  const { activeScanSession } = useAuth();
   const [reports, setReports] = useState([]);
   const [filteredReports, setFilteredReports] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -38,15 +40,21 @@ const ReportsList = () => {
     }
   };
 
-  // Generate new report
+  // Generate new report for active scan session
   const generateReport = async () => {
+    if (!activeScanSession) {
+      alert('الرجاء اختيار فحص أولاً');
+      return;
+    }
+    
     try {
       setIsGenerating(true);
       const { data } = await api.post('/reports/generate', {
+        scan_session_id: activeScanSession,
         title: `تقرير أمان IoT - ${new Date().toLocaleDateString('ar-SA')}`
       });
       if (data.success) {
-        alert('تم إنشاء التقرير بنجاح!');
+        alert('تم إنشاء تقرير PDF بنجاح!');
         fetchReports(); // Refresh the list
       } else {
         alert('حدث خطأ في إنشاء التقرير: ' + data.message);
@@ -59,26 +67,27 @@ const ReportsList = () => {
     }
   };
 
-  // Download report
+  // Download report as PDF
   const downloadReport = async (reportId) => {
     try {
-      const { data } = await api.get(`/reports/${reportId}/download`);
-      
-      if (data.success) {
-        // Create a temporary link to download the file
-        const link = document.createElement('a');
-        link.href = data.file_path;
-        link.download = data.filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      } else {
-        alert('حدث خطأ في تحميل التقرير: ' + data.message);
-      }
+      // Download directly from backend
+      const url = `http://localhost:5000/api/reports/${reportId}/download`;
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     } catch (error) {
       console.error('Error downloading report:', error);
       alert('حدث خطأ في تحميل التقرير');
     }
+  };
+
+  // Preview report in new tab
+  const previewReport = (reportId) => {
+    const url = `http://localhost:5000/api/reports/${reportId}/preview`;
+    window.open(url, '_blank');
   };
 
   // Filter reports based on search term
@@ -229,7 +238,11 @@ const ReportsList = () => {
                           <Download className="h-4 w-4 ml-1" />
                           تحميل
                         </Button>
-                        <Button size="sm" variant="outline">
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => previewReport(report.id)}
+                        >
                           <Eye className="h-4 w-4 ml-1" />
                           معاينة
                         </Button>
@@ -273,8 +286,7 @@ const ReportsList = () => {
                     </div>
                     
                     <div className="flex items-center space-x-2 space-x-reverse">
-                      <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">HTML</span>
-                      <span className="text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded">PDF</span>
+                      <span className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded">✓ PDF</span>
                     </div>
                   </div>
                 </CardContent>
