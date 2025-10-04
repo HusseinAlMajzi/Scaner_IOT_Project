@@ -17,8 +17,10 @@ import {
   Clock,
   Network
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 
 const DeviceList = () => {
+  const { activeScanSession } = useAuth();
   const [devices, setDevices] = useState([]);
   const [filteredDevices, setFilteredDevices] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -29,7 +31,10 @@ const DeviceList = () => {
   const fetchDevices = async () => {
     try {
       setIsLoading(true);
-      const { data } = await api.get('/devices');
+      const url = activeScanSession
+        ? `/devices?scan_session_id=${activeScanSession}`
+        : '/devices';
+      const { data } = await api.get(url);
       if (data.success) {
         setDevices(data.devices);
         setFilteredDevices(data.devices);
@@ -66,7 +71,7 @@ const DeviceList = () => {
 
   useEffect(() => {
     fetchDevices();
-  }, []);
+  }, [activeScanSession]);
 
   const getDeviceIcon = (deviceType) => {
     const type = deviceType?.toLowerCase() || '';

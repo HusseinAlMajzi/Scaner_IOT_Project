@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import NewScanDialog from './NewScanDialog';
 import { 
   Shield, 
   Wifi, 
@@ -19,7 +20,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 
 const Dashboard = () => {
-  const { scanStatus, refreshScanStatus } = useAuth();  // Get scan status from global context
+  const { scanStatus, refreshScanStatus, activeScanSession, setActiveScanSession } = useAuth();
   
   const [stats, setStats] = useState({
     total: 0,
@@ -31,13 +32,17 @@ const Dashboard = () => {
   
   const [devices, setDevices] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [showNewScanDialog, setShowNewScanDialog] = useState(false);
 
   // Scan status is now handled globally in AuthContext
 
   // Fetch vulnerability stats
   const fetchStats = async () => {
     try {
-      const { data } = await api.get('/vulnerabilities/stats');
+      const url = activeScanSession 
+        ? `/vulnerabilities/stats?scan_session_id=${activeScanSession}`
+        : '/vulnerabilities/stats';
+      const { data } = await api.get(url);
       if (data.success) {
         setStats(data.stats);
       } 
@@ -49,7 +54,10 @@ const Dashboard = () => {
   // Fetch devices
   const fetchDevices = async () => {
     try {
-      const { data } = await api.get('/devices');
+      const url = activeScanSession
+        ? `/devices?scan_session_id=${activeScanSession}`
+        : '/devices';
+      const { data } = await api.get(url);
       if (data.success) {
         setDevices(data.devices);
       }
@@ -58,7 +66,55 @@ const Dashboard = () => {
     }
   };
 
-  // Start scan
+  // Start scan with name
+  const startScanWithName = async (scanName) => {
+    const mode = 'comprehensive';
+    setIsLoading(true);
+    try {
+      console.log('[Dashboard] Starting scan:', scanName);
+      
+      const result = await api.post('/scan/start', {
+        scan_name: scanName,
+        scan_mode: mode
+      });
+      
+      if (result && result.data && result.data.success) {
+        const newScanId = result.data.scan_id;
+        setActiveScanSession(newScanId);  // Set new scan as active
+        alert(`تم بدء الفحص: ${scanName}`);
+        await refreshScanStatus();
+        setTimeout(() => {
+          fetchStats();
+          fetchDevices();
+        }, 1000);
+      } else if (result && result.data) {
+        if (result.data.message && result.data.message.includes('فحص آخر قيد التشغيل')) {
+          const stopAndRetry = window.confirm('يوجد فحص قيد التشغيل. هل تريد إيقافه وبدء فحص جديد؟');
+          if (stopAndRetry) {
+            await stopScan();
+            setTimeout(() => setShowNewScanDialog(true), 1000);
+            return;
+          }
+        }
+        alert('خطأ: ' + (result.data.message || 'فشل بدء الفحص'));
+      }
+    } catch (error) {
+      console.error('[Dashboard] Error starting scan:', error);
+      if (error.message && error.message.includes('400')) {
+        const stopAndRetry = window.confirm('يوجد فحص قيد التشغيل. هل تريد إيقافه وبدء فحص جديد؟');
+        if (stopAndRetry) {
+          await stopScan();
+          setTimeout(() => setShowNewScanDialog(true), 1000);
+          return;
+        }
+      }
+      alert('خطأ في الاتصال بالخادم: ' + error.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Open new scan dialog
   const startScan = async (mode = 'comprehensive') => {
     setIsLoading(true);
     try {
@@ -151,7 +207,7 @@ const Dashboard = () => {
       fetchStats();
       fetchDevices();
     }
-  }, [scanStatus.is_scanning]);
+  }, [scanStatus.is_scanning, activeScanSession]);
 
   const getSeverityColor = (severity) => {
     switch (severity?.toLowerCase()) {
@@ -174,7 +230,15 @@ const Dashboard = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6" dir="rtl">
+    <>
+      <NewScanDialog
+        open={showNewScanDialog}
+        onOpenChange={setShowNewScanDialog}
+        onStartScan={startScanWithName}
+        isScanning={scanStatus.is_scanning}
+      />
+      
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6" dir="rtl">
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="text-center mb-8">
@@ -219,12 +283,12 @@ const Dashboard = () => {
               ) : (
                 <div className="space-y-4">
                   <Button 
-                    onClick={() => startScan('comprehensive')} 
+                    onClick={() => setShowNewScanDialog(true)} 
                     disabled={isLoading}
                     className="w-full bg-blue-600 hover:bg-blue-700"
                   >
                     <Activity className="h-4 w-4 ml-2" />
-                    {isLoading ? 'جاري البدء...' : 'بدء الفحص'}
+                    بدء فحص جديد
                   </Button>
                   {scanStatus.current_step && (
                     <Alert>
@@ -390,6 +454,7 @@ const Dashboard = () => {
         </div>
       </div>
     </div>
+    </>
   );
 };
 

@@ -5,7 +5,7 @@ from flask_login import login_required, current_user
 from datetime import datetime
 import threading
 import uuid
-from src.models import db, Device, Vulnerability, ScanResult, Report
+from src.models import db, Device, Vulnerability, ScanResult, Report, ScanSession
 from src.services.device_scanner import DeviceScanner
 from src.services.vulnerability_scanner import VulnerabilityScanner
 from src.services.report_generator import ReportGenerator
@@ -42,10 +42,23 @@ def start_scan():
     
     data = request.get_json() or {}
     network_range = data.get('network_range')
-    scan_mode = data.get('scan_mode', 'standard')  # standard or enhanced
+    scan_mode = data.get('scan_mode', 'standard')
+    scan_name = data.get('scan_name', f'فحص {datetime.now().strftime("%Y-%m-%d %H:%M")}')
+    
+    # Create new scan session
+    scan_id = str(uuid.uuid4())
+    scan_session = ScanSession(
+        id=scan_id,
+        user_id=current_user.id,
+        name=scan_name,
+        scan_mode=scan_mode,
+        status='running',
+        started_at=datetime.now()
+    )
+    db.session.add(scan_session)
+    db.session.commit()
     
     # Start scan in background thread
-    scan_id = str(uuid.uuid4())
     scan_status = {
         'is_scanning': True,
         'progress': 0,
@@ -109,9 +122,20 @@ def stop_scan():
 @scanner_bp.route('/devices', methods=['GET'])
 @login_required
 def get_devices():
-    """Get all discovered devices for current user"""
+    """Get devices for current user, optionally filtered by scan session"""
     try:
-        devices = Device.query.filter_by(user_id=current_user.id).all()
+        scan_session_id = request.args.get('scan_session_id')
+        
+        if scan_session_id:
+            # Get devices for specific scan session
+            devices = Device.query.filter_by(
+                user_id=current_user.id,
+                scan_session_id=scan_session_id
+            ).all()
+        else:
+            # Get all devices (for backward compatibility)
+            devices = Device.query.filter_by(user_id=current_user.id).all()
+        
         return jsonify({
             'success': True,
             'devices': [device.to_dict() for device in devices]
@@ -161,13 +185,29 @@ def get_device_details(device_id):
 @scanner_bp.route('/vulnerabilities', methods=['GET'])
 @login_required
 def get_vulnerabilities():
-    """Get all discovered vulnerabilities for current user"""
+    """Get vulnerabilities, optionally filtered by scan session"""
     try:
-        # Get vulnerabilities for user's devices only
-        user_device_ids = [d.id for d in Device.query.filter_by(user_id=current_user.id).all()]
+        scan_session_id = request.args.get('scan_session_id')
+        
+        # Get devices for this session or all user devices
+        if scan_session_id:
+            user_device_ids = [d.id for d in Device.query.filter_by(
+                user_id=current_user.id,
+                scan_session_id=scan_session_id
+            ).all()]
+        else:
+            user_device_ids = [d.id for d in Device.query.filter_by(user_id=current_user.id).all()]
+        
+        if not user_device_ids:
+            return jsonify({
+                'success': True,
+                'vulnerabilities': []
+            })
+        
         scan_results = ScanResult.query.filter(ScanResult.device_id.in_(user_device_ids)).all()
         vuln_ids = [sr.vulnerability_id for sr in scan_results]
-        vulnerabilities = Vulnerability.query.filter(Vulnerability.id.in_(vuln_ids)).all()
+        vulnerabilities = Vulnerability.query.filter(Vulnerability.id.in_(vuln_ids)).all() if vuln_ids else []
+        
         return jsonify({
             'success': True,
             'vulnerabilities': [vuln.to_dict() for vuln in vulnerabilities]
@@ -181,12 +221,33 @@ def get_vulnerabilities():
 @scanner_bp.route('/vulnerabilities/stats', methods=['GET'])
 @login_required
 def get_vulnerability_stats():
-    """Get vulnerability statistics for current user"""
+    """Get vulnerability statistics, optionally filtered by scan session"""
     try:
-        # Get vulnerabilities for user's devices only
-        user_device_ids = [d.id for d in Device.query.filter_by(user_id=current_user.id).all()]
+        scan_session_id = request.args.get('scan_session_id')
+        
+        # Get devices for this session or all user devices
+        if scan_session_id:
+            user_device_ids = [d.id for d in Device.query.filter_by(
+                user_id=current_user.id,
+                scan_session_id=scan_session_id
+            ).all()]
+        else:
+            user_device_ids = [d.id for d in Device.query.filter_by(user_id=current_user.id).all()]
+        
+        if not user_device_ids:
+            return jsonify({
+                'success': True,
+                'stats': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+            })
+        
         scan_results = ScanResult.query.filter(ScanResult.device_id.in_(user_device_ids)).all()
         vuln_ids = [sr.vulnerability_id for sr in scan_results]
+        
+        if not vuln_ids:
+            return jsonify({
+                'success': True,
+                'stats': {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+            })
         
         total_vulns = Vulnerability.query.filter(Vulnerability.id.in_(vuln_ids)).count()
         critical_count = Vulnerability.query.filter(Vulnerability.id.in_(vuln_ids), Vulnerability.severity=='Critical').count()
@@ -444,24 +505,12 @@ def perform_comprehensive_scan(network_range, scan_id, app, user_id):
             
             saved_devices = []
             for device_info in discovered_devices:
-                # Check if device already exists for this user
-                existing_device = Device.query.filter_by(
-                    ip_address=device_info['ip_address'],
-                    user_id=user_id
-                ).first()
-                
-                if existing_device:
-                    # Update existing device
-                    for key, value in device_info.items():
-                        if hasattr(existing_device, key):
-                            setattr(existing_device, key, value)
-                    device = existing_device
-                else:
-                    # Create new device
-                    device_info['user_id'] = user_id
-                    device = Device(**device_info)
-                    db.session.add(device)
-                
+                # Always create NEW device for each scan (don't reuse old devices)
+                # This ensures each scan has its own isolated data
+                device_info['user_id'] = user_id
+                device_info['scan_session_id'] = scan_id
+                device = Device(**device_info)
+                db.session.add(device)
                 saved_devices.append(device)
             
             db.session.commit()
@@ -527,6 +576,15 @@ def perform_comprehensive_scan(network_range, scan_id, app, user_id):
             db.session.commit()
             scan_status['vulnerabilities_found'] = total_vulnerabilities
             
+            # Update scan session status
+            session = ScanSession.query.get(scan_id)
+            if session:
+                session.status = 'completed'
+                session.completed_at = datetime.now()
+                session.devices_found = scan_status['devices_found']
+                session.vulnerabilities_found = total_vulnerabilities
+                db.session.commit()
+            
             # Step 4: Complete
             scan_status['current_step'] = 'اكتمل الفحص'
             scan_status['progress'] = 100
@@ -583,15 +641,10 @@ def perform_enhanced_scan(network_range, scan_id, app, user_id):
             
             saved_devices = []
             for device_info in discovered_devices:
-                # Check if device already exists for this user
-                existing_device = Device.query.filter_by(
-                    ip_address=device_info['ip_address'],
-                    user_id=user_id
-                ).first()
-                
-                # Prepare device data
+                # Always create NEW device for this scan session
                 device_data = {
                     'user_id': user_id,
+                    'scan_session_id': scan_id,
                     'ip_address': device_info['ip_address'],
                     'mac_address': device_info.get('mac_address'),
                     'hostname': device_info.get('hostname'),
@@ -601,17 +654,8 @@ def perform_enhanced_scan(network_range, scan_id, app, user_id):
                     'last_scanned_at': datetime.now()
                 }
                 
-                if existing_device:
-                    # Update existing device
-                    for key, value in device_data.items():
-                        if hasattr(existing_device, key) and value is not None:
-                            setattr(existing_device, key, value)
-                    device = existing_device
-                else:
-                    # Create new device
-                    device = Device(**device_data)
-                    db.session.add(device)
-                
+                device = Device(**device_data)
+                db.session.add(device)
                 saved_devices.append(device)
             
             db.session.commit()
@@ -679,6 +723,15 @@ def perform_enhanced_scan(network_range, scan_id, app, user_id):
             
             # Cleanup
             scanner.cleanup()
+            
+            # Update scan session status
+            session = ScanSession.query.get(scan_id)
+            if session:
+                session.status = 'completed'
+                session.completed_at = datetime.now()
+                session.devices_found = len(saved_devices)
+                session.vulnerabilities_found = total_vulnerabilities
+                db.session.commit()
             
             # Step 5: Complete
             scan_status['current_step'] = 'اكتمل الفحص المتقدم'
@@ -1175,13 +1228,10 @@ def perform_ultra_comprehensive_scan(network_range, scan_id, app, user_id):
             saved_devices = []
             for device_info in all_discovered_devices:
                 try:
-                    existing_device = Device.query.filter_by(
-                        ip_address=device_info['ip_address'],
-                        user_id=user_id
-                    ).first()
-                    
+                    # Always create NEW device for this scan session
                     device_data = {
                         'user_id': user_id,
+                        'scan_session_id': scan_id,
                         'ip_address': device_info['ip_address'],
                         'mac_address': device_info.get('mac_address'),
                         'hostname': device_info.get('hostname'),
@@ -1191,15 +1241,8 @@ def perform_ultra_comprehensive_scan(network_range, scan_id, app, user_id):
                         'last_scanned_at': datetime.now()
                     }
                     
-                    if existing_device:
-                        for key, value in device_data.items():
-                            if hasattr(existing_device, key) and value is not None:
-                                setattr(existing_device, key, value)
-                        device = existing_device
-                    else:
-                        device = Device(**device_data)
-                        db.session.add(device)
-                    
+                    device = Device(**device_data)
+                    db.session.add(device)
                     saved_devices.append(device)
                 except Exception as e:
                     print(f"[Phase 4] Error saving device {device_info.get('ip_address')}: {e}")
@@ -1366,6 +1409,15 @@ def perform_ultra_comprehensive_scan(network_range, scan_id, app, user_id):
                 print(f"[Phase 8] Commit error: {e}")
                 db.session.rollback()
             
+            # Update scan session
+            session = ScanSession.query.get(scan_id)
+            if session:
+                session.status = 'completed'
+                session.completed_at = datetime.now()
+                session.devices_found = len(saved_devices)
+                session.vulnerabilities_found = all_vulnerabilities_count
+                db.session.commit()
+            
             # Final summary
             scan_status['progress'] = 100
             scan_status['current_step'] = '🎉 Scan Complete!'
@@ -1386,3 +1438,111 @@ def perform_ultra_comprehensive_scan(network_range, scan_id, app, user_id):
             scan_status['current_step'] = f'خطأ في الفحص: {str(e)}'
             scan_status['is_scanning'] = False
 
+
+
+# ============================================================================
+# SCAN SESSION MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@scanner_bp.route('/scan-sessions', methods=['GET'])
+@login_required
+def get_scan_sessions():
+    """
+    Get all scan sessions for current user
+    """
+    try:
+        sessions = ScanSession.query.filter_by(
+            user_id=current_user.id
+        ).order_by(ScanSession.created_at.desc()).all()
+        
+        return jsonify({
+            'success': True,
+            'sessions': [session.to_dict() for session in sessions]
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'خطأ في جلب الفحوصات: {str(e)}'
+        }), 500
+
+
+@scanner_bp.route('/scan-sessions/<session_id>', methods=['GET'])
+@login_required
+def get_scan_session(session_id):
+    """
+    Get specific scan session with its data
+    """
+    try:
+        session = ScanSession.query.filter_by(
+            id=session_id,
+            user_id=current_user.id
+        ).first()
+        
+        if not session:
+            return jsonify({
+                'success': False,
+                'message': 'الفحص غير موجود'
+            }), 404
+        
+        # Get devices for this session
+        devices = Device.query.filter_by(scan_session_id=session_id).all()
+        device_ids = [d.id for d in devices]
+        
+        # Get vulnerabilities for these devices
+        scan_results = ScanResult.query.filter(
+            ScanResult.device_id.in_(device_ids)
+        ).all() if device_ids else []
+        vuln_ids = [sr.vulnerability_id for sr in scan_results]
+        vulnerabilities = Vulnerability.query.filter(
+            Vulnerability.id.in_(vuln_ids)
+        ).all() if vuln_ids else []
+        
+        session_data = session.to_dict()
+        session_data['devices'] = [d.to_dict() for d in devices]
+        session_data['vulnerabilities'] = [v.to_dict() for v in vulnerabilities]
+        session_data['total_devices'] = len(devices)
+        session_data['total_vulnerabilities'] = len(vulnerabilities)
+        
+        return jsonify({
+            'success': True,
+            'session': session_data
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'خطأ في جلب بيانات الفحص: {str(e)}'
+        }), 500
+
+
+@scanner_bp.route('/scan-sessions/<session_id>', methods=['DELETE'])
+@login_required
+def delete_scan_session(session_id):
+    """
+    Delete a scan session and all its associated data
+    """
+    try:
+        session = ScanSession.query.filter_by(
+            id=session_id,
+            user_id=current_user.id
+        ).first()
+        
+        if not session:
+            return jsonify({
+                'success': False,
+                'message': 'الفحص غير موجود'
+            }), 404
+        
+        # Delete will cascade to devices and scan_results
+        db.session.delete(session)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'تم حذف الفحص بنجاح'
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'message': f'خطأ في حذف الفحص: {str(e)}'
+        }), 500

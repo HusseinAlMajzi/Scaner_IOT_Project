@@ -9,6 +9,7 @@ class Device(db.Model):
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # User isolation
+    scan_session_id = db.Column(db.String(36), db.ForeignKey('scan_sessions.id'), nullable=True)  # Link to scan session
     ip_address = db.Column(db.String(45), nullable=False)  # IPv4 or IPv6
     mac_address = db.Column(db.String(17), nullable=True)
     hostname = db.Column(db.String(255), nullable=True)
@@ -28,6 +29,7 @@ class Device(db.Model):
         return {
             'id': self.id,  
             'user_id': self.user_id,
+            'scan_session_id': self.scan_session_id,
             'ip_address': self.ip_address,   
             'mac_address': self.mac_address,   
             'hostname': self.hostname,   

@@ -15,6 +15,9 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [activeScanSession, setActiveScanSession] = useState(
+    localStorage.getItem('activeScanSession') || null
+  );
   const [scanStatus, setScanStatus] = useState({
     is_scanning: false,
     progress: 0,
@@ -23,6 +26,15 @@ export const AuthProvider = ({ children }) => {
     devices_found: 0,
     vulnerabilities_found: 0
   });
+
+  // Update localStorage when active scan session changes
+  useEffect(() => {
+    if (activeScanSession) {
+      localStorage.setItem('activeScanSession', activeScanSession);
+    } else {
+      localStorage.removeItem('activeScanSession');
+    }
+  }, [activeScanSession]);
 
   // Check if user is logged in on mount
   useEffect(() => {
@@ -195,6 +207,8 @@ export const AuthProvider = ({ children }) => {
     scanStatus,
     setScanStatus,
     refreshScanStatus,
+    activeScanSession,
+    setActiveScanSession,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

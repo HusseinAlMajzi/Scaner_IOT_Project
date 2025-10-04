@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, Navigate } from 'react-router-dom';
+import { api } from '../config/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -29,9 +30,10 @@ import ReportsList from './ReportsList';
 
 function MainApp() {
   const navigate = useNavigate();
-  const { user, logout, scanStatus } = useAuth();
+  const { user, logout, scanStatus, activeScanSession, setActiveScanSession } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [scanSessions, setScanSessions] = useState([]);
 
   const navigation = [
     {
@@ -74,6 +76,45 @@ function MainApp() {
     navigate(item.path);
     setSidebarOpen(false);
   };
+
+  // Fetch scan sessions
+  const fetchScanSessions = async () => {
+    try {
+      const { data } = await api.get('/scan-sessions');
+      if (data.success) {
+        setScanSessions(data.sessions);
+        // Set first completed scan as active if no active session
+        if (!activeScanSession && data.sessions.length > 0) {
+          const firstCompleted = data.sessions.find(s => s.status === 'completed');
+          if (firstCompleted) {
+            setActiveScanSession(firstCompleted.id);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching scan sessions:', error);
+    }
+  };
+
+  // Select a scan session
+  const selectScanSession = (sessionId) => {
+    if (scanStatus.is_scanning) {
+      alert('يجب إيقاف الفحص الحالي قبل اختيار فحص آخر');
+      return;
+    }
+    setActiveScanSession(sessionId);
+    // Refresh data for new session
+    navigate('/dashboard');
+  };
+
+  useEffect(() => {
+    fetchScanSessions();
+    
+    // Refresh sessions list when scan completes
+    if (!scanStatus.is_scanning && scanStatus.progress === 100) {
+      setTimeout(fetchScanSessions, 1000);
+    }
+  }, [scanStatus.is_scanning]);
 
   return (
     <div className="min-h-screen bg-gray-100" dir="rtl">
@@ -170,6 +211,34 @@ function MainApp() {
               );
             })}
           </nav>
+
+          {/* Previous Scans Section */}
+          {scanSessions.length > 0 && (
+            <div className="px-4 py-3 border-t">
+              <h3 className="text-xs font-semibold text-gray-500 mb-2">الفحوصات السابقة</h3>
+              <div className="space-y-1 max-h-48 overflow-y-auto">
+                {scanSessions.filter(s => s.status === 'completed').map((session) => (
+                  <button
+                    key={session.id}
+                    onClick={() => selectScanSession(session.id)}
+                    className={`w-full text-right p-2 rounded text-sm transition-colors ${
+                      activeScanSession === session.id
+                        ? 'bg-blue-100 text-blue-900 font-medium'
+                        : 'hover:bg-gray-100 text-gray-700'
+                    }`}
+                    disabled={scanStatus.is_scanning}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="truncate flex-1">{session.name}</span>
+                      <span className="text-xs text-gray-500 mr-2">
+                        {session.devices_found} جهاز
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Footer */}
           <div className="p-4 border-t">
